@@ -1,0 +1,448 @@
+@import "tailwindcss";
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Design tokens. Dark-first: inventory work is long-session, so dark is the
+   default and light is a deliberate override, not the other way round.
+   Surfaces are a blue-shifted neutral ramp, not pure grey — pure grey reads
+   muddy next to a saturated accent.
+   ───────────────────────────────────────────────────────────────────────────── */
+@theme {
+  --color-canvas: #0b0f14;
+  --color-surface: #101720;
+  --color-surface-2: #151e2a;
+  --color-surface-3: #1c2735;
+  --color-border: #1f2a38;
+  --color-border-strong: #2b3949;
+
+  --color-ink: #e6edf6;
+  --color-ink-2: #b6c4d6;
+  --color-muted: #7d8ea3;
+  --color-faint: #56657a;
+
+  --color-accent: #4f46e5;
+  --color-accent-soft: #6366f1;
+  --color-cyan: #22d3ee;
+
+  --color-ok: #10b981;
+  --color-ok-soft: #34d399;
+  --color-warn: #f59e0b;
+  --color-danger: #f43f5e;
+  --color-info: #38bdf8;
+  --color-violet: #a78bfa;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --radius-card: 14px;
+
+  --ease-out-soft: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Base
+   ───────────────────────────────────────────────────────────────────────────── */
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow: hidden;
+    /* The webview must not rubber-band or text-select like a document. */
+    overscroll-behavior: none;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--color-accent) 40%, transparent);
+    color: #fff;
+  }
+
+  /* Numbers in a column must align. Tabular figures everywhere a value is
+     compared vertically; proportional figures elsewhere. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+
+  button {
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 0;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--color-faint);
+  }
+
+  /* A single visible focus treatment everywhere. Never remove it. */
+  :focus-visible {
+    outline: 2px solid var(--color-accent-soft);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-border-strong);
+    border-radius: 6px;
+    border: 2px solid var(--color-canvas);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #3a4b5f;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Components
+   ───────────────────────────────────────────────────────────────────────────── */
+@layer components {
+  .card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-card);
+  }
+
+  .card-pad {
+    padding: 18px;
+  }
+
+  .kpi-label {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    height: 34px;
+    padding: 0 13px;
+    border-radius: 9px;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    transition:
+      background-color 140ms var(--ease-out-soft),
+      border-color 140ms var(--ease-out-soft),
+      color 140ms var(--ease-out-soft),
+      opacity 140ms var(--ease-out-soft);
+  }
+
+  .btn-primary {
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-accent-soft) 100%, white 6%),
+      var(--color-accent)
+    );
+    color: #fff;
+    box-shadow:
+      0 1px 0 0 rgb(255 255 255 / 0.12) inset,
+      0 4px 14px -6px color-mix(in srgb, var(--color-accent) 70%, transparent);
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: linear-gradient(180deg, #7b7ef5, #4f46e5);
+  }
+  .btn-primary:disabled {
+    opacity: 0.45;
+  }
+
+  .btn-ghost {
+    color: var(--color-ink-2);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-2);
+  }
+  .btn-ghost:hover:not(:disabled) {
+    background: var(--color-surface-3);
+    border-color: var(--color-border-strong);
+    color: var(--color-ink);
+  }
+  .btn-ghost:disabled {
+    opacity: 0.45;
+  }
+
+  .btn-danger {
+    color: #fff;
+    background: color-mix(in srgb, var(--color-danger) 88%, black);
+  }
+  .btn-danger:hover:not(:disabled) {
+    background: var(--color-danger);
+  }
+  .btn-danger:disabled {
+    opacity: 0.45;
+  }
+
+  .btn-quiet {
+    color: var(--color-muted);
+  }
+  .btn-quiet:hover:not(:disabled) {
+    color: var(--color-ink);
+    background: var(--color-surface-2);
+  }
+
+  .input {
+    height: 34px;
+    width: 100%;
+    padding: 0 11px;
+    border-radius: 9px;
+    background: var(--color-canvas);
+    border: 1px solid var(--color-border);
+    color: var(--color-ink);
+    font-size: 13px;
+    transition:
+      border-color 140ms var(--ease-out-soft),
+      background-color 140ms var(--ease-out-soft);
+  }
+  .input:hover:not(:disabled) {
+    border-color: var(--color-border-strong);
+  }
+  .input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    background: color-mix(in srgb, var(--color-accent) 6%, var(--color-canvas));
+  }
+  .input[aria-invalid="true"] {
+    border-color: var(--color-danger);
+  }
+  .input:disabled {
+    opacity: 0.5;
+  }
+
+  select.input {
+    appearance: none;
+    padding-right: 30px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%237d8ea3' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+  }
+
+  textarea.input {
+    height: auto;
+    padding: 9px 11px;
+    line-height: 1.5;
+    resize: vertical;
+  }
+
+  .label {
+    display: block;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+    margin-bottom: 6px;
+  }
+
+  /* Data table. Dense on purpose: 13px, 40px rows. This is a tool, not a page. */
+  .tbl {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 13px;
+  }
+  .tbl thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--color-surface);
+    border-bottom: 1px solid var(--color-border);
+    padding: 9px 12px;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+    white-space: nowrap;
+    user-select: none;
+  }
+  .tbl tbody td {
+    padding: 0 12px;
+    height: 42px;
+    border-bottom: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+    color: var(--color-ink-2);
+    vertical-align: middle;
+  }
+  /* `max-w-0` on a cell is how you make truncation actually happen in a fixed-layout table:
+     without it the content box grows past the column and the text never ellipsises. */
+  .tbl td.max-w-0 {
+    overflow: hidden;
+  }
+  .tbl tbody tr {
+    transition: background-color 110ms var(--ease-out-soft);
+  }
+  .tbl tbody tr:hover {
+    background: var(--color-surface-2);
+  }
+  .tbl .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 21px;
+    padding: 0 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+
+  /* Status carries a glyph and a text label as well as colour, so it survives
+     colour-blindness and greyscale printing. */
+  .pill-ok {
+    color: var(--color-ok-soft);
+    background: color-mix(in srgb, var(--color-ok) 14%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-ok) 30%, transparent);
+  }
+  .pill-warn {
+    color: #fbbf24;
+    background: color-mix(in srgb, var(--color-warn) 14%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-warn) 32%, transparent);
+  }
+  .pill-danger {
+    color: #fb7185;
+    background: color-mix(in srgb, var(--color-danger) 14%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-danger) 32%, transparent);
+  }
+  .pill-info {
+    color: #7dd3fc;
+    background: color-mix(in srgb, var(--color-info) 14%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-info) 30%, transparent);
+  }
+  .pill-neutral {
+    color: var(--color-muted);
+    background: var(--color-surface-3);
+  }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    height: 36px;
+    padding: 0 11px;
+    border-radius: 9px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-muted);
+    position: relative;
+    transition:
+      background-color 140ms var(--ease-out-soft),
+      color 140ms var(--ease-out-soft);
+  }
+  .nav-item:hover {
+    background: var(--color-surface-2);
+    color: var(--color-ink);
+  }
+  .nav-item.active {
+    background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+    color: #fff;
+  }
+  .nav-item.active::before {
+    content: "";
+    position: absolute;
+    left: -11px;
+    top: 50%;
+    translate: 0 -50%;
+    width: 3px;
+    height: 18px;
+    border-radius: 0 3px 3px 0;
+    background: linear-gradient(180deg, var(--color-accent-soft), var(--color-cyan));
+  }
+
+  .skeleton {
+    background: linear-gradient(
+      90deg,
+      var(--color-surface-2) 25%,
+      var(--color-surface-3) 37%,
+      var(--color-surface-2) 63%
+    );
+    background-size: 400% 100%;
+    animation: shimmer 1.4s ease-in-out infinite;
+    border-radius: 6px;
+  }
+
+  @keyframes shimmer {
+    0% {
+      background-position: 100% 0;
+    }
+    100% {
+      background-position: 0 0;
+    }
+  }
+
+  /* Streaming caret on assistant prose. */
+  .caret::after {
+    content: "";
+    display: inline-block;
+    width: 7px;
+    height: 15px;
+    translate: 1px 2px;
+    background: var(--color-cyan);
+    border-radius: 1px;
+    animation: blink 1s steps(2, start) infinite;
+  }
+  @keyframes blink {
+    50% {
+      opacity: 0;
+    }
+  }
+
+  .scroll-y {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
