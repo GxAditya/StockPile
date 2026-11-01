@@ -129,9 +129,9 @@ export const KIND_META: Record<string, { label: string; tone: string }> = {
 };
 
 export const TONE_TEXT: Record<string, string> = {
-  danger: "text-danger",
-  warn: "text-warn",
-  info: "text-info",
+  danger: "text-danger-ink",
+  warn: "text-warn-ink",
+  info: "text-info-ink",
   muted: "text-muted",
 };
 

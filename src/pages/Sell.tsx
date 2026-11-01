@@ -2,14 +2,26 @@ import { useQuery } from "@tanstack/react-query";
 import { Search, ShoppingCart } from "lucide-react";
 import { useState } from "react";
 import { api } from "../lib/api";
-import { fmtMoney, fmtNum, expiryTone, HEALTH_META } from "../lib/format";
+import { fmtMoney, fmtNum, expiryTone, HEALTH_META, TONE_TEXT } from "../lib/format";
 import type { StockRow } from "../lib/types";
 import { SellModal } from "../components/SellModal";
-import { EmptyState, SkeletonRows } from "../components/ui";
+import { EmptyState, SkeletonTable } from "../components/ui";
+
+const SELL_COLUMNS = [
+  { label: "Product" },
+  { label: "Category" },
+  { label: "Earliest expiry" },
+  { label: "On hand", num: true },
+  { label: "Batches", num: true },
+  { label: "Avg price", num: true },
+  { label: "Status" },
+  { label: "", width: 86 },
+];
 
 /**
- * Standalone selling surface. Pick a product, then the FEFO-aware sale dialog runs exactly as it
- * does from the inventory table — there is only one implementation of a sale.
+ * Standalone selling surface: pick a product, then the FEFO-aware sale dialog
+ * runs exactly as it does from the inventory table. One implementation of a
+ * sale, reached from two places.
  */
 export function Sell() {
   const [query, setQuery] = useState("");
@@ -33,12 +45,12 @@ export function Sell() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 border-b border-border px-5 py-3">
+      <div className="toolbar-glass shrink-0 border-b border-[var(--hairline)] px-5 py-2.5">
         <div className="relative max-w-md">
           <Search
             size={14}
             className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-faint"
-            strokeWidth={1.75}
+            strokeWidth={1.9}
           />
           <input
             value={query}
@@ -55,21 +67,10 @@ export function Sell() {
 
       <div className="scroll-y min-h-0 flex-1">
         {list.isLoading ? (
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>Product</th>
-                <th>Expiry</th>
-                <th className="num">On hand</th>
-                <th className="num">Unit price</th>
-                <th className="w-[86px]" />
-              </tr>
-            </thead>
-            <SkeletonRows rows={10} cols={5} />
-          </table>
+          <SkeletonTable columns={SELL_COLUMNS} rows={10} />
         ) : rows.length === 0 ? (
           <EmptyState
-            icon={<ShoppingCart size={19} />}
+            icon={<ShoppingCart size={19} strokeWidth={1.9} />}
             title={term ? "Nothing sellable matches" : "No stock available to sell"}
             body={
               term
@@ -78,17 +79,14 @@ export function Sell() {
             }
           />
         ) : (
-          <table className="tbl">
+          <table className="tbl tbl-rows-interactive">
             <thead>
               <tr>
-                <th>Product</th>
-                <th>Category</th>
-                <th>Earliest expiry</th>
-                <th className="num">On hand</th>
-                <th className="num">Batches</th>
-                <th className="num">Avg price</th>
-                <th>Status</th>
-                <th className="w-[86px]" />
+                {SELL_COLUMNS.map((c, i) => (
+                  <th key={i} className={c.num ? "num" : ""} style={c.width ? { width: c.width } : undefined}>
+                    {c.label}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -98,16 +96,16 @@ export function Sell() {
                 return (
                   <tr key={r.id}>
                     <td>
-                      <span className="font-medium text-ink">{r.name}</span>
+                      <span className="font-[510] text-ink">{r.name}</span>
                       {r.sku ? (
                         <span className="ml-2 font-mono text-[10.5px] text-faint">{r.sku}</span>
                       ) : null}
                     </td>
                     <td className="text-[12px]">{r.category ?? "—"}</td>
-                    <td className={`tnum text-[12px] ${tone.tone === "danger" ? "text-danger" : tone.tone === "warn" ? "text-warn" : "text-muted"}`}>
+                    <td className={`tnum text-[12px] ${TONE_TEXT[tone.tone]}`}>
                       {r.earliestExpiry ? `${r.earliestExpiry} · ${tone.label}` : "No expiry"}
                     </td>
-                    <td className="num tnum font-medium text-ink">
+                    <td className="num tnum font-[510] text-ink">
                       {fmtNum(r.totalQuantity)}
                       <span className="ml-1 text-[10.5px] text-faint">{r.unit}</span>
                     </td>
@@ -123,7 +121,7 @@ export function Sell() {
                       <div className="flex justify-end">
                         <button
                           onClick={() => setSelected(r)}
-                          className="btn btn-primary !h-[27px] !px-2.5 !text-[12px]"
+                          className="btn btn-ghost !h-[25px] !px-2.5 !text-[11.5px]"
                         >
                           Sell
                         </button>

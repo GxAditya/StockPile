@@ -2,8 +2,10 @@ import { ArrowRight, Boxes, CornerDownLeft, History, Search, ShoppingCart } from
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
+import { haptic } from "../lib/motion";
 import { fmtNum } from "../lib/format";
 import type { Product } from "../lib/types";
+import { Spinner } from "./ui";
 
 interface Row {
   id: string;
@@ -11,8 +13,6 @@ interface Row {
   title: string;
   subtitle: string;
   to: string;
-  meta?: string;
-  metaTone?: string;
   product?: Product;
 }
 
@@ -23,34 +23,60 @@ const NAV_ROWS: Row[] = [
   { id: "n4", kind: "nav", title: "Sell", subtitle: "Record a sale", to: "/sell" },
   { id: "n5", kind: "nav", title: "History", subtitle: "Every movement, with buyers", to: "/history" },
   { id: "n6", kind: "nav", title: "Insights", subtitle: "Deterministic analysis", to: "/insights" },
-  { id: "n7", kind: "nav", title: "Settings", subtitle: "Models, data, routing", to: "/settings" },
+  { id: "n7", kind: "nav", title: "Settings", subtitle: "Appearance, models, data", to: "/settings" },
 ];
 
-/** ⌘K palette. FTS-backed product search plus static navigation. */
+const NAV_ICON: Record<string, typeof Boxes> = {
+  "/sell": ShoppingCart,
+  "/history": History,
+};
+
+/**
+ * ⌘K palette: full-text product search plus static navigation.
+ *
+ * The highlight follows the pointer and the arrow keys continuously, so the
+ * user always knows what Enter will open — never only at the moment it commits.
+ */
 export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<Product[]>([]);
+  const [searching, setSearching] = useState(false);
   const [cursor, setCursor] = useState(0);
+  const [visible, setVisible] = useState(open);
+  const [closing, setClosing] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const nav = useNavigate();
 
   useEffect(() => {
     if (open) {
+      setVisible(true);
+      setClosing(false);
       setQ("");
       setHits([]);
+      setSearching(false);
       setCursor(0);
-      // Focus after paint so the caret does not jump.
       requestAnimationFrame(() => inputRef.current?.focus());
+    } else if (visible) {
+      setClosing(true);
+      const t = window.setTimeout(() => {
+        setVisible(false);
+        setClosing(false);
+      }, 200);
+      return () => window.clearTimeout(t);
     }
-  }, [open]);
+    return undefined;
+  }, [open, visible]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!visible || closing) return undefined;
     const term = q.trim();
     if (term.length < 1) {
       setHits([]);
-      return;
+      setSearching(false);
+      return undefined;
     }
+    setSearching(true);
     const t = window.setTimeout(() => {
       api
         .searchProducts(term, 8)
@@ -58,17 +84,20 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           setHits(rows);
           setCursor(0);
         })
-        .catch(() => setHits([]));
+        .catch(() => setHits([]))
+        .finally(() => setSearching(false));
     }, 110);
     return () => window.clearTimeout(t);
-  }, [q, open]);
+  }, [q, visible, closing]);
 
   const rows = useMemo<Row[]>(() => {
     const productRows: Row[] = hits.map((p) => ({
       id: `p${p.id}`,
       kind: "product",
       title: p.name,
-      subtitle: [p.sku, p.category].filter(Boolean).join(" · ") || "No SKU",
+      // Show what there is, then abbreviate an id rather than dumping a UUID:
+      // the tail is what distinguishes two similar SKUs.
+      subtitle: [p.sku && shortSku(p.sku), p.category].filter(Boolean).join(" · ") || "No SKU",
       to: `/inventory?focus=${p.id}`,
       product: p,
     }));
@@ -79,23 +108,39 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     return [...productRows, ...navRows];
   }, [hits, q]);
 
-  if (!open) return null;
+  // Keep the active row in view as the cursor moves.
+  useEffect(() => {
+    const el = listRef.current?.querySelector<HTMLElement>(`[data-idx="${cursor}"]`);
+    el?.scrollIntoView({ block: "nearest" });
+  }, [cursor]);
+
+  if (!visible) return null;
 
   const go = (r: Row) => {
+    haptic("tick");
     nav(r.to);
     onClose();
   };
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/62 p-6 pt-[14vh] backdrop-blur-[2px]"
+      className={`scrim fixed inset-0 z-50 flex items-start justify-center bg-[var(--scrim)] p-6 pt-[12vh] ${
+        closing ? "is-closing" : ""
+      }`}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="card w-full max-w-[600px] overflow-hidden shadow-2xl shadow-black/60">
-        <div className="flex items-center gap-2.5 border-b border-border px-4">
-          <Search size={15.5} className="shrink-0 text-muted" strokeWidth={1.75} />
+      <div
+        className={`glass-pop w-full max-w-[560px] overflow-hidden rounded-[var(--radius-pop)] ${
+          closing ? "is-closing material-pop" : "material-pop"
+        }`}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Search products or jump to a page"
+      >
+        <div className="flex items-center gap-2.5 px-4">
+          <Search size={15} className="shrink-0 text-faint" strokeWidth={1.9} aria-hidden />
           <input
             ref={inputRef}
             value={q}
@@ -109,59 +154,95 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
                 setCursor((c) => Math.max(c - 1, 0));
               } else if (e.key === "Enter" && rows[cursor]) {
                 e.preventDefault();
-                go(rows[cursor]);
+                go(rows[cursor]!);
               } else if (e.key === "Escape") {
                 onClose();
               }
             }}
             placeholder="Search products or jump to a page…"
-            className="h-[46px] flex-1 bg-transparent text-[14px] outline-none placeholder:text-faint"
+            className="h-[44px] flex-1 bg-transparent text-[13.5px] outline-none placeholder:text-faint"
+            aria-label="Search products or pages"
+            aria-expanded={rows.length > 0}
+            aria-activedescendant={rows[cursor]?.id}
           />
-          <kbd className="rounded border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-muted">
-            ESC
-          </kbd>
+          {searching ? <Spinner size={12} className="text-faint" /> : null}
+          <kbd className="kbd">esc</kbd>
         </div>
 
-        <div className="max-h-[52vh] overflow-y-auto py-1.5">
+        <div
+          ref={listRef}
+          className="scroll-y max-h-[52vh] border-t border-[var(--hairline)] py-1.5"
+          role="listbox"
+        >
           {rows.length === 0 ? (
-            <div className="px-4 py-10 text-center text-[13px] text-muted">
-              {q.trim() ? `No product or page matches “${q}”.` : "Start typing to search."}
+            <div className="px-4 py-10 text-center">
+              <p className="text-[12.5px] text-muted">
+                {q.trim() ? `No product or page matches “${q}”.` : "Start typing to search."}
+              </p>
+              <p className="mt-1 text-[11px] text-faint">
+                Products come from full-text search · pages filter as you type
+              </p>
             </div>
           ) : (
             rows.map((r, i) => {
               const active = i === cursor;
-              const Icon = r.kind === "product" ? Boxes : r.to === "/sell" ? ShoppingCart : r.to === "/history" ? History : null;
+              const Icon = r.kind === "product" ? Boxes : NAV_ICON[r.to];
               return (
                 <button
                   key={r.id}
+                  id={r.id}
+                  data-idx={i}
+                  role="option"
+                  aria-selected={active}
                   onMouseEnter={() => setCursor(i)}
+                  onFocus={() => setCursor(i)}
                   onClick={() => go(r)}
-                  className={`flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors ${
-                    active ? "bg-accent/16" : ""
+                  className={`flex w-full items-center gap-3 px-4 py-[7px] text-left transition-colors ${
+                    active ? "bg-accent/15" : ""
                   }`}
                 >
-                  <span className={active ? "text-ink" : "text-muted"}>
-                    {Icon ? <Icon size={15.5} strokeWidth={1.75} /> : <ArrowRight size={15.5} strokeWidth={1.75} />}
+                  <span className={active ? "text-accent" : "text-faint"} aria-hidden>
+                    {Icon ? (
+                      <Icon size={15} strokeWidth={1.9} />
+                    ) : (
+                      <ArrowRight size={15} strokeWidth={1.9} />
+                    )}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] font-medium text-ink">{r.title}</span>
-                    <span className="block truncate text-[11.5px] text-muted">{r.subtitle}</span>
+                    <span className="block truncate text-[12.5px] font-[510] text-ink">
+                      {r.title}
+                    </span>
+                    <span className="block truncate text-[11px] text-muted">{r.subtitle}</span>
                   </span>
-                  {active ? <CornerDownLeft size={13} className="text-muted" /> : null}
+                  {active ? (
+                    <CornerDownLeft size={12.5} className="shrink-0 text-muted" aria-hidden />
+                  ) : null}
                 </button>
               );
             })
           )}
         </div>
 
-        <div className="flex items-center justify-between border-t border-border px-4 py-2 text-[11px] text-faint">
+        <div className="flex items-center justify-between border-t border-[var(--hairline)] px-4 py-2 text-[11px] text-faint">
           <span className="flex items-center gap-3">
-            <span>↑↓ navigate</span>
-            <span>⏎ open</span>
+            <span className="flex items-center gap-1">
+              <kbd className="kbd">↑</kbd>
+              <kbd className="kbd">↓</kbd> navigate
+            </span>
+            <span className="flex items-center gap-1">
+              <kbd className="kbd">⏎</kbd> open
+            </span>
           </span>
-          <span className="tnum">{fmtNum(rows.length)} result{rows.length === 1 ? "" : "s"}</span>
+          <span className="tnum">
+            {fmtNum(rows.length)} result{rows.length === 1 ? "" : "s"}
+          </span>
         </div>
       </div>
     </div>
   );
+}
+
+/** Long SKUs are noise in a 40-char subtitle; keep the distinguishing tail. */
+function shortSku(sku: string): string {
+  return sku.length > 14 ? `…${sku.slice(-12)}` : sku;
 }

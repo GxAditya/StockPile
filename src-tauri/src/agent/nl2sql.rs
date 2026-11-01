@@ -10,8 +10,19 @@ use regex::Regex;
 use serde_json::Value;
 use std::path::Path;
 
-const ALLOWED_TABLES: &[&str] = &["products", "batches", "ledger", "usage_daily"];
-const HARD_ROW_CAP: i64 = 200;
+const ALLOWED_TABLES: &[&str] = &[
+    "products",
+    "batches",
+    "ledger",
+    "usage_daily",
+    // Local-first single-operator app: the model runs on the user's own machine over the
+    // user's own data, so reads are not a privilege boundary. All user tables are readable.
+    // Writes stay impossible regardless (validator + read-only connection + query_only).
+    "settings",
+    "agent_messages",
+    "products_fts",
+];
+const HARD_ROW_CAP: i64 = 500;
 
 /// Any occurrence of a write/DDL keyword anywhere in the statement, including inside a string
 /// literal. Stricter than a real parser on purpose.
@@ -143,7 +154,7 @@ pub fn validate(sql: &str) -> AppResult<String> {
         format!("{cleaned} LIMIT {HARD_ROW_CAP}")
     };
 
-    if capped.len() > 4000 {
+    if capped.len() > 8000 {
         return Err(AppError::validation("the generated query is too long"));
     }
     Ok(capped)
@@ -201,9 +212,10 @@ pub fn schema_prompt() -> String {
          ledger(id, ts, kind, product_id, product_name, batch_id, batch_no, expiry_date, \
          qty_delta, unit_price, total_value, buyer_name, note, source, actor)\n\
          usage_daily(product_id, day, units_out, units_in)\n\
+         settings(key, value)\n\
+         agent_messages(id, session_id, ts, role, content)\n\
          \n\
-         Readable tables: {}. Queries are capped at {} rows.",
-        ALLOWED_TABLES.join(", "),
+         All of these tables are readable with SELECT/WITH. Queries are capped at {} rows.",
         HARD_ROW_CAP
     )
 }
@@ -263,10 +275,10 @@ mod tests {
     #[test]
     fn accepts_reads_and_caps() {
         let ok = validate("SELECT name FROM products ORDER BY name").unwrap();
-        assert!(ok.contains("LIMIT 200"));
+        assert!(ok.contains(&format!("LIMIT {HARD_ROW_CAP}")));
         let ok2 = validate("SELECT * FROM batches LIMIT 5").unwrap();
         assert!(ok2.contains("LIMIT 5"));
-        assert!(!ok2.contains("LIMIT 200"));
+        assert!(!ok2.contains(&format!("LIMIT {HARD_ROW_CAP}")));
     }
 
     #[test]
@@ -302,8 +314,8 @@ mod tests {
                 "{t} is on the allowlist but was rejected"
             );
         }
-        // Reachable-but-not-allowlisted internals must stay closed.
-        for t in ["sqlite_master", "pragma_table_info", "fts5_master", "settings"] {
+        // SQLite internals must stay closed even though all user tables are readable.
+        for t in ["sqlite_master", "pragma_table_info", "fts5_master", "sqlite_sequence"] {
             if ALLOWED_TABLES.contains(&t) {
                 continue;
             }
@@ -321,7 +333,7 @@ mod tests {
 
     #[test]
     fn limit_is_forced_and_cannot_be_removed() {
-        assert!(validate("SELECT * FROM ledger").unwrap().contains("LIMIT 200"));
+        assert!(validate("SELECT * FROM ledger").unwrap().contains(&format!("LIMIT {HARD_ROW_CAP}")));
         // An existing limit is respected rather than doubled.
         assert_eq!(validate("SELECT * FROM ledger LIMIT 7").unwrap().matches("LIMIT").count(), 1);
         // A LIMIT hidden inside a string literal must not suppress the real cap.

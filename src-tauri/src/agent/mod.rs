@@ -16,8 +16,8 @@ use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-const MAX_TOOL_ROUNDS: usize = 3;
-const MAX_CONTEXT_ROWS: usize = 40;
+const MAX_TOOL_ROUNDS: usize = 6;
+const MAX_CONTEXT_ROWS: usize = 200;
 const MEMORY_TURNS: usize = 6;
 
 /// Everything the renderer needs to draw one agent turn.
@@ -74,11 +74,27 @@ pub enum AgentEvent {
 }
 
 /// A pending confirmation held server-side so the renderer only has to send an id back.
+/// `call_id` is minted once when the confirmation is proposed and is reused both as the
+/// `HashMap` key in `AppState::pending` and as the `call_id` in the `Confirmation` event.
+/// Generating two different ids (one for storage, one for the event) makes every confirm
+/// fail with "no longer pending", no matter how fast the operator clicks.
 #[derive(Debug, Clone)]
 pub struct PendingMutation {
+    pub call_id: String,
     pub tool: tools::Tool,
     pub args: Value,
     pub summary: String,
+}
+
+impl PendingMutation {
+    fn new(tool: tools::Tool, args: Value, summary: String) -> Self {
+        Self {
+            call_id: uuid::Uuid::new_v4().to_string(),
+            tool,
+            args,
+            summary,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -274,21 +290,21 @@ impl Agent {
                 if tool.is_write() {
                     match tools::prepare_write(db, call, Some("agent".into())) {
                         Ok(p) => {
-                            let id = uuid::Uuid::new_v4().to_string();
-                            pending.push(PendingMutation {
-                                tool: p.tool,
-                                args: p.args.clone(),
-                                summary: p.summary.clone(),
-                            });
+                            let pending_mut =
+                                PendingMutation::new(p.tool, p.args.clone(), p.summary.clone());
+                            let call_id = pending_mut.call_id.clone();
+                            let summary = pending_mut.summary.clone();
+                            let args = pending_mut.args.clone();
+                            pending.push(pending_mut);
                             messages.push(json!({
                                 "role": "tool",
                                 "content": "Waiting for the operator to confirm. Tell the user exactly what you are about to do."
                             }));
                             events.push(AgentEvent::Confirmation {
-                                call_id: id,
+                                call_id,
                                 tool: tool.name().into(),
-                                summary: p.summary,
-                                args: p.args,
+                                summary,
+                                args,
                             });
                         }
                         Err(e) => messages.push(json!({
@@ -407,10 +423,10 @@ impl Agent {
                     "expiryDate": parsed.expiry,
                     "actor": "agent:deterministic"
                 });
-                pending.push(PendingMutation {
-                    tool: tools::Tool::AddBatch,
-                    args: args.clone(),
-                    summary: format!(
+                pending.push(PendingMutation::new(
+                    tools::Tool::AddBatch,
+                    args.clone(),
+                    format!(
                         "Receive {qty} × {product_name} into batch {batch_no} at {:.2}{}{}",
                         parsed.price.unwrap_or(0.0),
                         parsed
@@ -420,13 +436,16 @@ impl Agent {
                             .unwrap_or_default(),
                         if missing.contains(&"price") { " — price defaulted to 0.00" } else { "" }
                     ),
-                });
-                events.push(AgentEvent::Confirmation {
-                    call_id: uuid::Uuid::new_v4().to_string(),
-                    tool: "add_batch".into(),
-                    summary: pending.last().map(|p| p.summary.clone()).unwrap_or_default(),
-                    args,
-                });
+                ));
+                {
+                    let p = pending.last().expect("just pushed");
+                    events.push(AgentEvent::Confirmation {
+                        call_id: p.call_id.clone(),
+                        tool: "add_batch".into(),
+                        summary: p.summary.clone(),
+                        args,
+                    });
+                }
                 if let Some(m) = missing.iter().find(|m| **m == "price") {
                     events.push(AgentEvent::Notice {
                         message: format!("No price in your message — defaulting batch price to 0.00 ({m})."),
@@ -486,19 +505,22 @@ impl Agent {
                             "buyerName": buyer,
                             "actor": "agent:deterministic"
                         });
-                        pending.push(PendingMutation {
-                            tool: tools::Tool::SellStock,
-                            args: args.clone(),
-                            summary: format!(
+                        pending.push(PendingMutation::new(
+                            tools::Tool::SellStock,
+                            args.clone(),
+                            format!(
                                 "Sell {qty} × {product_name} to {buyer} (FEFO batches: {batches})"
                             ),
-                        });
-                        events.push(AgentEvent::Confirmation {
-                            call_id: uuid::Uuid::new_v4().to_string(),
-                            tool: "sell_stock".into(),
-                            summary: pending.last().map(|p| p.summary.clone()).unwrap_or_default(),
-                            args,
-                        });
+                        ));
+                        {
+                            let p = pending.last().expect("just pushed");
+                            events.push(AgentEvent::Confirmation {
+                                call_id: p.call_id.clone(),
+                                tool: "sell_stock".into(),
+                                summary: p.summary.clone(),
+                                args,
+                            });
+                        }
                         if parsed.buyer.is_none() {
                             events.push(AgentEvent::Notice {
                                 message: "No buyer name in your message — the sale will record an empty buyer. Cancel and include one to keep the history useful.".into(),
@@ -522,17 +544,20 @@ impl Agent {
                     "reason": reason,
                     "actor": "agent:deterministic"
                 });
-                pending.push(PendingMutation {
-                    tool: tools::Tool::AdjustStock,
-                    args: args.clone(),
-                    summary: format!("Adjust stock by {delta:+} ({reason})"),
-                });
-                events.push(AgentEvent::Confirmation {
-                    call_id: uuid::Uuid::new_v4().to_string(),
-                    tool: "adjust_stock".into(),
-                    summary: pending.last().map(|p| p.summary.clone()).unwrap_or_default(),
-                    args,
-                });
+                pending.push(PendingMutation::new(
+                    tools::Tool::AdjustStock,
+                    args.clone(),
+                    format!("Adjust stock by {delta:+} ({reason})"),
+                ));
+                {
+                    let p = pending.last().expect("just pushed");
+                    events.push(AgentEvent::Confirmation {
+                        call_id: p.call_id.clone(),
+                        tool: "adjust_stock".into(),
+                        summary: p.summary.clone(),
+                        args,
+                    });
+                }
             }
 
             intent::Action::QueryStock => match product_id {
@@ -711,14 +736,11 @@ impl Agent {
         let mut events = Vec::new();
         let installed = self.ollama.list_models().await.unwrap_or_default();
 
-        // Analytical questions get the analytics route: NL→SQL against the read-only connection.
-        let wants_analytics = question.to_lowercase().contains("trend")
-            || question.to_lowercase().contains("why")
-            || question.to_lowercase().contains("compare")
-            || question.to_lowercase().contains("best month")
-            || question.to_lowercase().contains("growth");
-
-        if wants_analytics {
+        // Local-first: the model may read ALL inventory data. When the tool loop produced
+        // no prose, always give NL→SQL one chance against the read-only connection before
+        // admitting defeat — not just for keyword-matched "analytics" questions. The model
+        // itself can also call `run_readonly_query` directly during the tool loop.
+        if pending.is_empty() {
             if let Some((route, sql)) = self.propose_sql(&installed, question).await {
                 match nl2sql::run(&crate::db::db_path(), &sql) {
                     Ok((names, rows)) => {
@@ -895,23 +917,28 @@ ABSOLUTE RULES
 1. Never state a quantity, price, stock level, or date that is not present in a tool result.
    If you have not called a tool, you do not know the answer.
 2. Call a tool whenever the answer depends on inventory data. Do not answer from memory.
-3. Prefer search_products before get_stock when the product name is a fragment.
-4. Dates are YYYY-MM-DD. Quantities are whole units.
+3. You have FULL read access to all inventory data. Narrow tools (search_products, get_stock,
+   list_expiring, recent_activity, stock_value_by_category, low_stock, top_sellers) cover the
+   common cases; when they do not answer the question, use run_readonly_query with your own
+   SELECT/WITH over products, batches, ledger, usage_daily (plus settings, agent_messages).
+   Join and aggregate freely. Always include a LIMIT (max 500 rows).
+4. Prefer search_products before get_stock when the product name is a fragment.
+5. Dates are YYYY-MM-DD. Quantities are whole units.
 ";
     if wants_write {
         format!(
             "{base}\
-5. You may change inventory, but ONLY what the operator explicitly asked for. \
+6. You may change inventory, but ONLY what the operator explicitly asked for. \
    Do not bundle extra changes. Do not restock something because it looks low.
-6. For a write, state plainly what you are about to do and let the confirmation card do the rest.
-7. If a required detail is missing (quantity, batch number, buyer), ask for it instead of guessing.
+7. For a write, state plainly what you are about to do and let the confirmation card do the rest.
+8. If a required detail is missing (quantity, batch number, buyer), ask for it instead of guessing.
 
 ANSWER STYLE: two or three sentences. No preamble. Use plain numbers."
         )
     } else {
         format!(
             "{base}\
-5. This is a read-only request. Do not attempt to modify anything.
+6. This is a read-only request. Do not attempt to modify anything.
 
 ANSWER STYLE: two or three sentences. Lead with the answer, then one line of supporting detail. \
 No preamble, no restating the question, no lists unless asked."

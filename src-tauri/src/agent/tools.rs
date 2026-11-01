@@ -21,6 +21,7 @@ pub enum Tool {
     StockValueByCategory,
     LowStock,
     TopSellers,
+    RunReadonlyQuery,
     CreateProduct,
     AddBatch,
     SellStock,
@@ -37,6 +38,7 @@ impl Tool {
             "stock_value_by_category" => Tool::StockValueByCategory,
             "low_stock" => Tool::LowStock,
             "top_sellers" => Tool::TopSellers,
+            "run_readonly_query" | "run_query" | "query_sql" => Tool::RunReadonlyQuery,
             "create_product" => Tool::CreateProduct,
             "add_batch" => Tool::AddBatch,
             "sell_stock" => Tool::SellStock,
@@ -54,6 +56,7 @@ impl Tool {
             Tool::StockValueByCategory => "stock_value_by_category",
             Tool::LowStock => "low_stock",
             Tool::TopSellers => "top_sellers",
+            Tool::RunReadonlyQuery => "run_readonly_query",
             Tool::CreateProduct => "create_product",
             Tool::AddBatch => "add_batch",
             Tool::SellStock => "sell_stock",
@@ -77,6 +80,7 @@ impl Tool {
             Tool::StockValueByCategory => "Total inventory value grouped by category.",
             Tool::LowStock => "Products at or below their reorder point, or with zero stock.",
             Tool::TopSellers => "Best selling products over a number of days, by units and value.",
+            Tool::RunReadonlyQuery => "Full read access to ALL inventory data. Run any single SELECT/WITH query over products, batches, ledger, usage_daily (plus settings, agent_messages). Use this when no narrow tool answers the question — joins, aggregates, trends, comparisons, full-table scans. Read-only: writes are rejected.",
             Tool::CreateProduct => "Create a new product. Only use this when the product genuinely does not exist yet.",
             Tool::AddBatch => "Receive stock: add a batch with batch number, expiry, unit price and quantity to an existing product.",
             Tool::SellStock => "Sell stock from a product to a named buyer. Allocates earliest-expiry-first.",
@@ -113,8 +117,12 @@ impl Tool {
             Tool::StockValueByCategory => obj(json!({}), json!([])),
             Tool::LowStock => obj(json!({}), json!([])),
             Tool::TopSellers => obj(
-                json!({ "days": {"type": "integer", "description": "Default 30."} }),
+                json!({ "days": {"type": "integer", "description": "Default 30."}, "limit": {"type": "integer", "description": "Max rows. Default 50."} }),
                 json!([]),
+            ),
+            Tool::RunReadonlyQuery => obj(
+                json!({ "sql": {"type": "string", "description": "A single SELECT or WITH query. May read products, batches, ledger, usage_daily, settings, agent_messages. Must include a LIMIT or one is added (cap 500 rows). No INSERT/UPDATE/DELETE/DDL."} }),
+                json!(["sql"]),
             ),
             Tool::CreateProduct => obj(
                 json!({
@@ -168,6 +176,7 @@ pub const ALL_TOOLS: &[Tool] = &[
     Tool::StockValueByCategory,
     Tool::LowStock,
     Tool::TopSellers,
+    Tool::RunReadonlyQuery,
     Tool::CreateProduct,
     Tool::AddBatch,
     Tool::SellStock,
@@ -320,8 +329,13 @@ fn resolve_product(db: &Db, args: &Value) -> AppResult<(i64, String)> {
 pub fn run_read(db: &Db, tool: Tool, args: &Value) -> AppResult<ReadResult> {
     match tool {
         Tool::SearchProducts => {
-            let q = arg_str(args, "query").unwrap_or_default();
-            let rows = db.read(|c| repo::search_products(c, &q, 8))?;
+            let q = arg_str(args, "query")
+                .or_else(|| arg_str(args, "q"))
+                .or_else(|| arg_str(args, "name"))
+                .unwrap_or_default();
+            // Local model: give it room to explore the catalogue. Default 20, up to 100.
+            let limit = arg_i64(args, "limit").unwrap_or(20).clamp(1, 100);
+            let rows = db.read(|c| repo::search_products(c, &q, limit))?;
             let out: Vec<Value> = db.read(|c| {
                 let mut st = c.prepare("SELECT id, name, COALESCE(SUM(quantity),0) q FROM batches WHERE product_id = ?1 GROUP BY product_id")?;
                 let mut acc = Vec::new();
@@ -373,7 +387,9 @@ pub fn run_read(db: &Db, tool: Tool, args: &Value) -> AppResult<ReadResult> {
                 "health": row.health.as_str(),
             });
             let mut all = vec![head];
-            all.extend(batches.iter().filter(|b| b.quantity > 0).map(|b| {
+            // Full read access: show every batch (including depleted ones) so the model can
+            // see batch history, not just live stock. Capped at 200 to bound context.
+            all.extend(batches.iter().take(200).map(|b| {
                 json!({
                     "batchNo": b.batch_no,
                     "expiry": b.expiry_date,
@@ -395,6 +411,7 @@ pub fn run_read(db: &Db, tool: Tool, args: &Value) -> AppResult<ReadResult> {
 
         Tool::ListExpiring => {
             let within = arg_i64(args, "within_days").unwrap_or(30).clamp(0, 3650);
+            let limit = arg_i64(args, "limit").unwrap_or(200).clamp(1, 500);
             let horizon = util::add_days(util::today(), within);
             let today = util::today_str();
             let rows: Vec<Value> = db.read(|c| {
@@ -403,10 +420,10 @@ pub fn run_read(db: &Db, tool: Tool, args: &Value) -> AppResult<ReadResult> {
                             CAST(julianday(b.expiry_date) - julianday(?1) AS INTEGER) AS d
                      FROM batches b JOIN products p ON p.id = b.product_id
                      WHERE b.quantity > 0 AND b.expiry_date IS NOT NULL AND b.expiry_date <= ?2
-                     ORDER BY b.expiry_date ASC LIMIT 60",
+                     ORDER BY b.expiry_date ASC LIMIT ?3",
                 )?;
                 let acc = st
-                    .query_map(rusqlite::params![today.clone(), horizon.clone()], |r| {
+                    .query_map(rusqlite::params![today.clone(), horizon.clone(), limit], |r| {
                         let qty: i64 = r.get(4)?;
                         let price: f64 = r.get(5)?;
                         Ok(json!({
@@ -440,11 +457,12 @@ pub fn run_read(db: &Db, tool: Tool, args: &Value) -> AppResult<ReadResult> {
             let from = util::add_days(util::today(), -days);
             let mut filter = HistoryFilter {
                 from: Some(from),
-                limit: Some(arg_i64(args, "limit").unwrap_or(25).clamp(1, 200)),
+                limit: Some(arg_i64(args, "limit").unwrap_or(50).clamp(1, 500)),
                 ..Default::default()
             };
             filter.product_id = arg_i64(args, "product_id");
-            filter.buyer_name = arg_str(args, "buyer_name");
+            filter.buyer_name = arg_str(args, "buyer_name")
+                .or_else(|| arg_str(args, "buyer"));
             let page = db.read(|c| repo::history_flat(c, &filter))?;
             let rows: Vec<Value> = page
                 .iter()
@@ -472,6 +490,7 @@ pub fn run_read(db: &Db, tool: Tool, args: &Value) -> AppResult<ReadResult> {
             // Self-contained query rather than borrowing a Dashboard field: the dashboard no
             // longer renders a category breakdown, but the agent still answers "value by
             // category", so the data has to live wherever the agent can reach it.
+            let limit = arg_i64(args, "limit").unwrap_or(50).clamp(1, 100);
             let rows: Vec<Value> = db.read(|c| {
                 let grand: f64 = c.query_row(
                     "SELECT COALESCE(SUM(quantity * unit_price), 0) FROM batches WHERE quantity > 0",
@@ -484,10 +503,10 @@ pub fn run_read(db: &Db, tool: Tool, args: &Value) -> AppResult<ReadResult> {
                             COALESCE(SUM(b.quantity), 0)
                      FROM batches b JOIN products p ON p.id = b.product_id
                      WHERE b.quantity > 0
-                     GROUP BY 1 ORDER BY 2 DESC LIMIT 8",
+                     GROUP BY 1 ORDER BY 2 DESC LIMIT ?1",
                 )?;
                 let acc = stmt
-                    .query_map([], |r| {
+                    .query_map([limit], |r| {
                         let v: f64 = r.get(1)?;
                         Ok(json!({
                             "category": r.get::<_, String>(0)?,
@@ -506,6 +525,7 @@ pub fn run_read(db: &Db, tool: Tool, args: &Value) -> AppResult<ReadResult> {
         }
 
         Tool::LowStock => {
+            let limit = arg_i64(args, "limit").unwrap_or(200).clamp(1, 500);
             let list = db.read(|c| {
                 repo::stock_list(
                     c,
@@ -514,7 +534,7 @@ pub fn run_read(db: &Db, tool: Tool, args: &Value) -> AppResult<ReadResult> {
                         category: None,
                         health: Some("low".into()),
                         sort: Some("totalQuantity".into()),
-                        limit: Some(100),
+                        limit: Some(limit),
                         offset: None,
                     },
                 )
@@ -527,7 +547,7 @@ pub fn run_read(db: &Db, tool: Tool, args: &Value) -> AppResult<ReadResult> {
                         category: None,
                         health: Some("out".into()),
                         sort: Some("name".into()),
-                        limit: Some(100),
+                        limit: Some(limit),
                         offset: None,
                     },
                 )?;
@@ -557,15 +577,16 @@ pub fn run_read(db: &Db, tool: Tool, args: &Value) -> AppResult<ReadResult> {
 
         Tool::TopSellers => {
             let days = arg_i64(args, "days").unwrap_or(30).clamp(1, 3650);
+            let limit = arg_i64(args, "limit").unwrap_or(50).clamp(1, 100);
             let from = util::add_days(util::today(), -days);
             let rows: Vec<Value> = db.read(|c| {
                 let mut st = c.prepare(
                     "SELECT product_name, SUM(-qty_delta) AS units, SUM(total_value) AS value
                      FROM ledger WHERE kind='sale' AND substr(ts,1,10) >= ?1
-                     GROUP BY product_name ORDER BY units DESC LIMIT 10",
+                     GROUP BY product_name ORDER BY units DESC LIMIT ?2",
                 )?;
                 let acc = st
-                    .query_map([from.clone()], |r| {
+                    .query_map(rusqlite::params![from.clone(), limit], |r| {
                         Ok(json!({
                             "name": r.get::<_, String>(0)?,
                             "units": r.get::<_, i64>(1)?,
@@ -578,6 +599,98 @@ pub fn run_read(db: &Db, tool: Tool, args: &Value) -> AppResult<ReadResult> {
             Ok(ReadResult {
                 summary: format!("top sellers over {days} day(s): {} entries", rows.len()),
                 rows,
+            })
+        }
+
+        Tool::RunReadonlyQuery => {
+            let sql = arg_str(args, "sql")
+                .or_else(|| arg_str(args, "query"))
+                .ok_or_else(|| AppError::validation("run_readonly_query needs a 'sql' field with a SELECT/WITH query"))?;
+            // Defence in depth stays: validator first, then a physically read-only connection.
+            // Falls back to the main connection (still validator-guarded) when no db file is
+            // set, e.g. in-memory test databases.
+            let safe = super::nl2sql::validate(&sql)?;
+            let path = crate::db::db_path();
+            if !path.as_os_str().is_empty() {
+                if let Ok(conn) = crate::db::open_read_only(&path) {
+                    let mut stmt = conn
+                        .prepare(&safe)
+                        .map_err(|e| AppError::validation(format!("could not prepare query: {e}")))?;
+                    let names: Vec<String> =
+                        stmt.column_names().iter().map(|s| s.to_string()).collect();
+                    let col_count = names.len();
+                    let mut rows_out: Vec<Value> = Vec::new();
+                    let mut rows = stmt
+                        .query([])
+                        .map_err(|e| AppError::validation(format!("query failed: {e}")))?;
+                    while let Some(row) = rows
+                        .next()
+                        .map_err(|e| AppError::validation(format!("row error: {e}")))?
+                    {
+                        if rows_out.len() >= 500 {
+                            break;
+                        }
+                        let mut obj = serde_json::Map::with_capacity(col_count);
+                        for i in 0..col_count {
+                            let v = match row.get_ref(i) {
+                                Ok(rusqlite::types::ValueRef::Null) => Value::Null,
+                                Ok(rusqlite::types::ValueRef::Integer(n)) => Value::from(n),
+                                Ok(rusqlite::types::ValueRef::Real(f)) => Value::from(f),
+                                Ok(rusqlite::types::ValueRef::Text(t)) => {
+                                    Value::from(String::from_utf8_lossy(t).to_string())
+                                }
+                                Ok(rusqlite::types::ValueRef::Blob(_)) => Value::Null,
+                                Err(_) => Value::Null,
+                            };
+                            obj.insert(names.get(i).cloned().unwrap_or_else(|| format!("col{i}")), v);
+                        }
+                        rows_out.push(Value::Object(obj));
+                    }
+                    return Ok(ReadResult {
+                        summary: format!("Read-only query returned {} row(s)", rows_out.len()),
+                        rows: rows_out,
+                    });
+                }
+            }
+            let rows_out: Vec<Value> = db.read(|c| {
+                let mut stmt = c
+                    .prepare(&safe)
+                    .map_err(|e| AppError::validation(format!("could not prepare query: {e}")))?;
+                let names: Vec<String> =
+                    stmt.column_names().iter().map(|s| s.to_string()).collect();
+                let col_count = names.len();
+                let mut out = Vec::new();
+                let mut rows = stmt
+                    .query([])
+                    .map_err(|e| AppError::validation(format!("query failed: {e}")))?;
+                while let Some(row) = rows
+                    .next()
+                    .map_err(|e| AppError::validation(format!("row error: {e}")))?
+                {
+                    if out.len() >= 500 {
+                        break;
+                    }
+                    let mut obj = serde_json::Map::with_capacity(col_count);
+                    for i in 0..col_count {
+                        let v = match row.get_ref(i) {
+                            Ok(rusqlite::types::ValueRef::Null) => Value::Null,
+                            Ok(rusqlite::types::ValueRef::Integer(n)) => Value::from(n),
+                            Ok(rusqlite::types::ValueRef::Real(f)) => Value::from(f),
+                            Ok(rusqlite::types::ValueRef::Text(t)) => {
+                                Value::from(String::from_utf8_lossy(t).to_string())
+                            }
+                            Ok(rusqlite::types::ValueRef::Blob(_)) => Value::Null,
+                            Err(_) => Value::Null,
+                        };
+                        obj.insert(names.get(i).cloned().unwrap_or_else(|| format!("col{i}")), v);
+                    }
+                    out.push(Value::Object(obj));
+                }
+                Ok::<_, AppError>(out)
+            })?;
+            Ok(ReadResult {
+                summary: format!("Read-only query returned {} row(s)", rows_out.len()),
+                rows: rows_out,
             })
         }
 
@@ -901,4 +1014,79 @@ pub fn project(rows: &[Value], max_rows: usize) -> String {
         out.push_str(&format!("\n… and {} more rows", rows.len() - max_rows));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{NewBatch, NewProduct, RestockRequest};
+
+    fn seeded_db() -> Db {
+        let db = Db::open_in_memory().expect("in-memory db");
+        crate::domain::restock(
+            &db,
+            &RestockRequest {
+                product: Some(NewProduct {
+                    name: "Amoxicillin".into(),
+                    category: Some("Pharma".into()),
+                    unit: Some("pcs".into()),
+                    ..NewProduct::default()
+                }),
+                batch: NewBatch {
+                    product_id: 0,
+                    batch_no: "B1".into(),
+                    expiry_date: Some("2027-03-01".into()),
+                    unit_price: 12.5,
+                    quantity: 100,
+                    received_at: None,
+                    supplier: None,
+                    notes: None,
+                },
+                source: Some("ui".into()),
+                actor: None,
+                note: None,
+            },
+        )
+        .expect("seed restock");
+        db
+    }
+
+    #[test]
+    fn readonly_query_reads_all_data() {
+        let db = seeded_db();
+        let res = run_read(
+            &db,
+            Tool::RunReadonlyQuery,
+            &json!({"sql": "SELECT name, category FROM products LIMIT 10"}),
+        )
+        .expect("select should succeed");
+        assert_eq!(res.rows.len(), 1);
+        assert_eq!(res.rows[0]["name"], json!("Amoxicillin"));
+
+        // Joins across all inventory tables work.
+        let join = run_read(
+            &db,
+            Tool::RunReadonlyQuery,
+            &json!({"sql": "SELECT p.name, SUM(b.quantity) q FROM products p JOIN batches b ON b.product_id = p.id GROUP BY p.id LIMIT 10"}),
+        )
+        .expect("join should succeed");
+        assert_eq!(join.rows.len(), 1);
+    }
+
+    #[test]
+    fn readonly_query_still_rejects_writes() {
+        let db = seeded_db();
+        for bad in [
+            "DELETE FROM ledger",
+            "UPDATE products SET name='x'",
+            "INSERT INTO products VALUES (1)",
+            "DROP TABLE products",
+            "SELECT * FROM sqlite_master LIMIT 1",
+        ] {
+            assert!(
+                run_read(&db, Tool::RunReadonlyQuery, &json!({"sql": bad})).is_err(),
+                "should have rejected: {bad}"
+            );
+        }
+    }
 }

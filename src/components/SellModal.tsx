@@ -3,9 +3,10 @@ import { AlertTriangle, ShoppingCart } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { errorCopy, useApp } from "../lib/ctx";
-import { fmtDate, fmtMoney, fmtNum, expiryTone } from "../lib/format";
+import { fmtDate, fmtMoney, fmtNum, expiryTone, TONE_TEXT } from "../lib/format";
+import { haptic } from "../lib/motion";
 import type { StockRow } from "../lib/types";
-import { Field, Modal, Spinner } from "./ui";
+import { Field, Modal, Skeleton, Spinner } from "./ui";
 
 /**
  * Sell stock. The FEFO plan is previewed before commit so the operator sees exactly which
@@ -65,6 +66,7 @@ export function SellModal({
         source: "ui",
       }),
     onSuccess: (r) => {
+      haptic("commit");
       toast(
         "ok",
         `Sold ${fmtNum(r.quantity)} to ${buyer.trim()}`,
@@ -73,7 +75,10 @@ export function SellModal({
       void qc.invalidateQueries();
       onDone();
     },
-    onError: (e) => setError(errorCopy(e)),
+    onError: (e) => {
+      haptic("error");
+      setError(errorCopy(e));
+    },
   });
 
   if (!row) return null;
@@ -95,7 +100,7 @@ export function SellModal({
       footer={
         <>
           {error ? (
-            <span className="mr-auto max-w-[260px] truncate text-[11.5px] text-danger">
+            <span className="mr-auto max-w-[260px] truncate text-[11.5px] text-danger-ink">
               {error.title}: {error.body}
             </span>
           ) : null}
@@ -107,7 +112,7 @@ export function SellModal({
             disabled={!valid || shortfall > 0 || submit.isPending || preview.isLoading}
             className="btn btn-primary"
           >
-            {submit.isPending ? <Spinner size={14} /> : <ShoppingCart size={14.5} strokeWidth={1.75} />}
+            {submit.isPending ? <Spinner size={14} /> : <ShoppingCart size={14.5} strokeWidth={1.9} />}
             Record sale
           </button>
         </>
@@ -176,31 +181,39 @@ export function SellModal({
 
         {/* ── FEFO allocation preview ────────────────────────────────────── */}
         <div className="rounded-[10px] border border-border bg-surface-2/60">
-          <header className="flex items-center justify-between border-b border-border px-3.5 py-2">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted">
+          <header className="flex items-center justify-between border-b border-[var(--hairline)] px-3.5 py-2">
+            <span className="text-[11px] font-[590] tracking-wider text-muted uppercase">
               FEFO allocation
             </span>
             {plan ? (
-              <span className="text-[11.5px] text-muted tnum">
+              <span className="tnum text-[11.5px] text-muted">
                 {plan.allocations.length} batch{plan.allocations.length === 1 ? "" : "es"} ·{" "}
-                <span className="font-medium text-ink">{fmtMoney(plan.totalValue, true)}</span>
+                <span className="font-[510] text-ink">{fmtMoney(plan.totalValue, true)}</span>
               </span>
             ) : null}
           </header>
 
           {preview.isLoading ? (
-            <div className="flex items-center gap-2 px-3.5 py-3 text-[12px] text-muted">
-              <Spinner size={13} /> Planning allocation…
-            </div>
+            <ul className="divide-y divide-[var(--hairline)]">
+              {Array.from({ length: 2 }).map((_, i) => (
+                <li key={i} className="flex items-center gap-3 px-3.5 py-2.5">
+                  <Skeleton h={10} w={62} />
+                  <Skeleton h={10} w={118} />
+                  <div className="flex-1" />
+                  <Skeleton h={10} w={52} />
+                  <Skeleton h={10} w={30} />
+                </li>
+              ))}
+            </ul>
           ) : preview.isError ? (
-            <p className="px-3.5 py-3 text-[12px] text-danger">
+            <p className="px-3.5 py-3 text-[12px] text-danger-ink">
               Could not plan the allocation. {(preview.error as Error).message}
             </p>
           ) : shortfall > 0 ? (
             <div className="flex items-start gap-2.5 px-3.5 py-3">
-              <AlertTriangle size={14} className="mt-0.5 shrink-0 text-danger" strokeWidth={1.75} />
+              <AlertTriangle size={14} className="mt-0.5 shrink-0 text-danger-ink" strokeWidth={1.9} />
               <div className="text-[12px] leading-snug">
-                <span className="font-medium text-danger">
+                <span className="font-[510] text-danger-ink">
                   Only {fmtNum(plan?.allocations.reduce((a, b) => a + b.quantity, 0) ?? 0)} available.
                 </span>{" "}
                 <span className="text-muted">
@@ -214,18 +227,18 @@ export function SellModal({
               No sellable batches.{allowExpired ? "" : " Expired batches are excluded."}
             </p>
           ) : (
-            <ul className="divide-y divide-border/60">
+            <ul className="divide-y divide-[var(--hairline)]">
               {plan?.allocations.map((a) => {
                 const tone = expiryTone(a.expiryDate);
                 return (
                   <li key={a.batchId} className="flex items-center gap-3 px-3.5 py-2 text-[12px]">
                     <span className="font-mono text-[11.5px] text-ink">{a.batchNo}</span>
-                    <span className={`tnum text-[11px] ${tone.tone === "danger" ? "text-danger" : tone.tone === "warn" ? "text-warn" : "text-muted"}`}>
+                    <span className={`tnum text-[11px] ${TONE_TEXT[tone.tone]}`}>
                       {a.expiryDate ? `${fmtDate(a.expiryDate)} · ${tone.label}` : "No expiry"}
                     </span>
                     <div className="flex-1" />
                     <span className="tnum text-muted">{fmtMoney(a.unitPrice, true)}</span>
-                    <span className="tnum w-[52px] text-right font-medium text-ink">
+                    <span className="tnum w-[52px] text-right font-[510] text-ink">
                       ×{fmtNum(a.quantity)}
                     </span>
                   </li>
@@ -235,7 +248,7 @@ export function SellModal({
           )}
 
           {hasExpired && !allowExpired ? (
-            <p className="border-t border-border px-3.5 py-2 text-[11.5px] text-muted">
+            <p className="border-t border-[var(--hairline)] px-3.5 py-2 text-[11.5px] text-muted">
               Expired stock is excluded by default. Tick the override below to include it.
             </p>
           ) : null}
@@ -246,7 +259,7 @@ export function SellModal({
             type="checkbox"
             checked={allowExpired}
             onChange={(e) => setAllowExpired(e.target.checked)}
-            className="h-3.5 w-3.5 accent-[var(--color-accent)]"
+            className="h-3.5 w-3.5"
           />
           Allow drawing from expired batches
         </label>

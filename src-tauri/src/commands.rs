@@ -436,25 +436,22 @@ pub async fn agent_chat(
     let session_id = session_id.unwrap_or_else(|| "default".into());
 
     let db_path = crate::db::db_path();
-    let mut pending_map: Vec<PendingMutation> = state
-        .pending
-        .lock()
-        .values()
-        .cloned()
-        .collect();
+    // Collect only the mutations proposed by *this* turn. Pre-existing entries stay in
+    // `state.pending` untouched so an earlier confirmation card remains confirmable even
+    // after the operator sends a follow-up message.
+    let mut new_pending: Vec<PendingMutation> = Vec::new();
 
     let agent = state.agent.clone();
     let events = agent
-        .handle(state.db(), &db_path, &session_id, &message, &mut pending_map)
+        .handle(state.db(), &db_path, &session_id, &message, &mut new_pending)
         .await;
 
-    // Register any newly proposed mutations so a later confirm can resolve them.
+    // Register newly proposed mutations under the same ids sent to the renderer in the
+    // `Confirmation` events, so a later `agent_confirm` can resolve them.
     {
         let mut guard = state.pending.lock();
-        guard.clear();
-        for p in pending_map {
-            let id = uuid::Uuid::new_v4().to_string();
-            guard.insert(id, p);
+        for p in new_pending {
+            guard.insert(p.call_id.clone(), p);
         }
     }
 

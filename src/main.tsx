@@ -5,6 +5,7 @@ import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "./shell";
 import { api, ApiError } from "./lib/api";
 import { Ctx } from "./lib/ctx";
+import { applyAppearance, readAppearance, watchSystemAppearance, type Appearance } from "./lib/theme";
 import type { Toast, ToastKind } from "./components/ui";
 import { AddStock } from "./pages/AddStock";
 import { Dashboard } from "./pages/Dashboard";
@@ -39,6 +40,7 @@ const queryClient = new QueryClient({
 
 function Root() {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [appearance, setAppearance] = useState<Appearance>(readAppearance);
   const nextId = useRef(1);
 
   const dismiss = useCallback((id: number) => {
@@ -67,6 +69,10 @@ function Root() {
   );
 
   const ctx = useMemo<AppCtxValue>(() => ({ toast, reportError }), [toast, reportError]);
+
+  // While appearance is on "auto", track the OS live rather than waiting for a
+  // restart. `applyAppearance` is idempotent, so re-running it is free.
+  useEffect(() => watchSystemAppearance(() => applyAppearance(readAppearance())), []);
 
   useEffect(() => {
     // A first run with an empty catalogue is unusable until it has data, so seed once.
@@ -104,7 +110,7 @@ function Root() {
           <Route path="/sell" element={<Sell />} />
           <Route path="/history" element={<History />} />
           <Route path="/insights" element={<Insights />} />
-          <Route path="/settings" element={<Settings />} />
+          <Route path="/settings" element={<Settings appearance={appearance} onAppearanceChange={setAppearance} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AppShell>
@@ -116,6 +122,11 @@ interface AppCtxValue {
   toast: (kind: ToastKind, title: string, detail?: string) => void;
   reportError: (e: unknown, fallback?: string) => void;
 }
+
+// Resolve appearance before the first paint so there is no flash of the wrong
+// theme: localStorage can only be read here, but the class has to be on before
+// React mounts.
+applyAppearance(readAppearance());
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

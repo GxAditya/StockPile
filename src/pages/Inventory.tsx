@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ChevronDown,
   ChevronRight,
+  ChevronUp,
   Download,
   Layers,
   PackagePlus,
@@ -23,7 +23,7 @@ import {
 import type { Batch, Health, StockRow } from "../lib/types";
 import { AddStockModal } from "../components/AddStockModal";
 import { SellModal } from "../components/SellModal";
-import { EmptyState, ErrorState, SkeletonRows } from "../components/ui";
+import { EmptyState, ErrorState, SkeletonTable } from "../components/ui";
 
 type SortKey =
   | "name"
@@ -55,7 +55,10 @@ export function Inventory() {
   const [debounced, setDebounced] = useState(search);
   const [category, setCategory] = useState<string>("all");
   const [health, setHealth] = useState<string>("all");
-  const [sort, setSort] = useState<SortKey>("name");
+  const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({
+    key: "name",
+    dir: "asc",
+  });
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [addOpen, setAddOpen] = useState(false);
   const [sellFor, setSellFor] = useState<StockRow | null>(null);
@@ -75,13 +78,13 @@ export function Inventory() {
   }, [focusId]);
 
   const list = useQuery({
-    queryKey: ["stock", debounced, category, health, sort],
+    queryKey: ["stock", debounced, category, health, sort.key, sort.dir],
     queryFn: () =>
       api.stockList({
         search: debounced.trim() || null,
         category: category === "all" ? null : category,
         health,
-        sort,
+        sort: sort.key,
         limit: 1000,
       }),
   });
@@ -114,17 +117,19 @@ export function Inventory() {
       return n;
     });
 
-  const onSort = (key: SortKey) => setSort(key);
+  // Clicking the active column flips direction; a new column starts ascending.
+  const onSort = (key: SortKey) =>
+    setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* ── Toolbar ────────────────────────────────────────────────────────── */}
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-5 py-3">
+      {/* ── Toolbar: floating chrome, content scrolls under the sticky head ── */}
+      <div className="toolbar-glass flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--hairline)] px-5 py-2.5">
         <div className="relative min-w-[220px] flex-1">
           <Search
             size={14}
             className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-faint"
-            strokeWidth={1.75}
+            strokeWidth={1.9}
           />
           <input
             value={search}
@@ -167,7 +172,7 @@ export function Inventory() {
           className="btn btn-primary ml-auto"
           title="Receive stock into a new or existing product"
         >
-          <PackagePlus size={15} strokeWidth={1.75} />
+          <PackagePlus size={14.5} strokeWidth={1.9} />
           Add stock
         </button>
 
@@ -177,27 +182,27 @@ export function Inventory() {
           className="btn btn-ghost"
           title="Export the current filtered view as CSV"
         >
-          <Download size={14.5} strokeWidth={1.75} />
+          <Download size={14} strokeWidth={1.9} />
           CSV
         </button>
       </div>
 
-      {/* ── Summary strip ──────────────────────────────────────────────────── */}
-      <div className="flex shrink-0 items-center gap-4 border-b border-border bg-surface/40 px-5 py-2 text-[11.5px]">
+      {/* ── Summary strip: status, not chrome — no hard divider where it overlaps ── */}
+      <div className="flex shrink-0 items-center gap-4 border-b border-[var(--hairline)] px-5 py-1.5 text-[11.5px]">
         <span className="flex items-center gap-1.5 text-muted">
-          <Layers size={12.5} strokeWidth={1.75} />
-          <span className="tnum font-medium text-ink">{fmtNum(list.data?.total ?? 0)}</span>
+          <Layers size={12.5} strokeWidth={1.9} />
+          <span className="tnum font-[510] text-ink">{fmtNum(list.data?.total ?? 0)}</span>
           product{(list.data?.total ?? 0) === 1 ? "" : "s"}
         </span>
-        <span className="text-muted tnum">
-          <span className="font-medium text-ink">{fmtNum(grandUnits)}</span> units
+        <span className="tnum text-muted">
+          <span className="font-[510] text-ink">{fmtNum(grandUnits)}</span> units
         </span>
-        <span className="text-muted tnum">
-          <span className="font-medium text-ink">{fmtMoney(grandValue)}</span> value
+        <span className="tnum text-muted">
+          <span className="font-[510] text-ink">{fmtMoney(grandValue)}</span> value
         </span>
         {filtered ? (
-          <span className="flex items-center gap-1.5 text-accent-soft">
-            <SlidersHorizontal size={12.5} strokeWidth={1.75} />
+          <span className="flex items-center gap-1.5 text-accent">
+            <SlidersHorizontal size={12.5} strokeWidth={1.9} />
             filtered
           </span>
         ) : null}
@@ -210,18 +215,10 @@ export function Inventory() {
         {list.isError ? (
           <ErrorState message={(list.error as Error).message} onRetry={() => void list.refetch()} />
         ) : list.isLoading ? (
-          <table className="tbl">
-            <thead>
-              <tr>
-                {COLUMNS.map((c) => (
-                  <th key={c.key} className={c.num ? "num" : ""}>
-                    {c.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <SkeletonRows rows={12} cols={8} />
-          </table>
+          <SkeletonTable
+            columns={COLUMNS.map((c) => ({ label: c.label, num: c.num }))}
+            rows={12}
+          />
         ) : rows.length === 0 ? (
           filtered ? (
             <EmptyState
@@ -268,14 +265,23 @@ export function Inventory() {
                     key={c.key}
                     className={`${c.num ? "num" : ""} cursor-pointer select-none hover:text-ink`}
                     onClick={() => onSort(c.key)}
-                    aria-sort={sort === c.key ? "ascending" : "none"}
+                    aria-sort={
+                      sort.key === c.key
+                        ? sort.dir === "asc"
+                          ? "ascending"
+                          : "descending"
+                        : "none"
+                    }
                   >
                     <span className="inline-flex items-center gap-1">
                       {c.label}
-                      {sort === c.key ? (
-                        <ChevronDown
+                      {sort.key === c.key ? (
+                        <ChevronUp
                           size={11}
-                          className={c.key === "name" || c.key === "category" ? "rotate-180" : ""}
+                          strokeWidth={2.4}
+                          aria-hidden
+                          className="text-accent transition-transform duration-[280ms] ease-[cubic-bezier(0.32,0.72,0.35,1)]"
+                          style={{ transform: sort.dir === "desc" ? "rotate(180deg)" : "rotate(0deg)" }}
                         />
                       ) : null}
                     </span>
@@ -340,28 +346,33 @@ function StockRowGroup({
     <>
       <tr
         onClick={onToggle}
-        className={`cursor-pointer ${highlighted ? "!bg-accent/14" : ""}`}
+        className={`pressable cursor-pointer ${highlighted ? "!bg-accent/12" : ""}`}
         aria-expanded={open}
       >
         <td>
           <span className="flex items-center gap-1.5">
-            {open ? (
-              <ChevronDown size={13} className="shrink-0 text-faint" />
-            ) : (
-              <ChevronRight size={13} className="shrink-0 text-faint" />
-            )}
-            <span className="font-medium text-ink">{row.name}</span>
+            <ChevronRight
+              size={13}
+              strokeWidth={2.2}
+              aria-hidden
+              className={`shrink-0 ${open ? "text-accent" : "text-faint"}`}
+              style={{
+                transform: open ? "rotate(90deg)" : "rotate(0deg)",
+                transition: "transform 280ms cubic-bezier(0.32,0.72,0.35,1)",
+              }}
+            />
+            <span className="font-[510] text-ink">{row.name}</span>
             {row.sku ? <span className="font-mono text-[10.5px] text-faint">{row.sku}</span> : null}
           </span>
         </td>
         <td className="text-[12px]">{row.category ?? "—"}</td>
-        <td className="num tnum font-medium text-ink">
+        <td className="num tnum font-[510] text-ink">
           {fmtNum(row.totalQuantity)}
           <span className="ml-1 text-[10.5px] text-faint">{row.unit}</span>
         </td>
         <td className="num tnum">{row.batchCount}</td>
         <td className="num tnum">{fmtMoney(row.avgCost, true)}</td>
-        <td className="num tnum font-medium text-ink">{fmtMoney(row.totalValue)}</td>
+        <td className="num tnum font-[510] text-ink">{fmtMoney(row.totalValue)}</td>
         <td>
           {row.earliestExpiry ? (
             <span className={`text-[12px] tnum ${toneClass(tone.tone)}`}>
@@ -383,7 +394,7 @@ function StockRowGroup({
             <button
               onClick={onSell}
               disabled={row.totalQuantity < 1}
-              className="btn btn-ghost !h-[27px] !px-2.5 !text-[12px]"
+              className="btn btn-ghost !h-[25px] !px-2.5 !text-[11.5px]"
               title={row.totalQuantity < 1 ? "No stock to sell" : `Sell ${row.name}`}
             >
               Sell
@@ -427,17 +438,29 @@ function BatchRows({ productId }: { productId: number }) {
 
   if (q.isLoading) {
     return (
-      <tr className="!bg-canvas/40">
-        <td colSpan={9} className="!px-6 !py-4">
-          <div className="skeleton h-3 w-40" />
+      <tr className="!bg-canvas/50">
+        <td colSpan={9} className="!p-0">
+          <div className="border-y border-[var(--hairline)] px-6 py-3">
+            <div className="skeleton mb-2.5 h-[9px] w-[168px]" />
+            <div className="space-y-2.5">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-4">
+                  <div className="skeleton h-[9px] w-[74px]" />
+                  <div className="skeleton h-[9px] w-[96px]" />
+                  <div className="skeleton ml-auto h-[9px] w-[58px]" />
+                  <div className="skeleton h-[9px] w-[42px]" />
+                </div>
+              ))}
+            </div>
+          </div>
         </td>
       </tr>
     );
   }
   if (q.isError || !q.data) {
     return (
-      <tr className="!bg-canvas/40">
-        <td colSpan={9} className="!px-6 !py-4 text-[12px] text-danger">
+      <tr className="!bg-canvas/50">
+        <td colSpan={9} className="!px-6 !py-4 text-[12px] text-danger-ink">
           Could not load batches.
         </td>
       </tr>
@@ -448,13 +471,13 @@ function BatchRows({ productId }: { productId: number }) {
   const live = batches.filter((b) => b.quantity > 0);
 
   return (
-    <tr className="!bg-canvas/35">
+    <tr className="!bg-canvas/40">
       <td colSpan={9} className="!p-0">
-        <div className="border-y border-border/70 px-6 py-3">
-          <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-wider text-faint">
-            <Layers size={11.5} strokeWidth={1.75} />
+        <div className="border-y border-[var(--hairline)] px-6 py-3">
+          <div className="mb-2 flex items-center gap-2 text-[11px] tracking-wider text-faint uppercase">
+            <Layers size={11.5} strokeWidth={1.9} />
             {live.length} live batch{live.length === 1 ? "" : "es"}
-            <span className="normal-case tracking-normal text-faint">
+            <span className="tracking-normal normal-case text-faint">
               · FEFO drains earliest expiry first
             </span>
           </div>
@@ -512,7 +535,7 @@ function BatchRow({
       </td>
       <td className="!py-1.5 num tnum">{fmtMoney(batch.unitPrice, true)}</td>
       <td className="!py-1.5 num tnum text-faint">—</td>
-      <td className="!py-1.5 num tnum font-medium text-ink">{fmtNum(batch.quantity)}</td>
+      <td className="!py-1.5 num tnum font-[510] text-ink">{fmtNum(batch.quantity)}</td>
       <td className="!py-1.5 tnum text-[11.5px] text-muted">{fmtDate(batch.receivedAt)}</td>
       <td className="!py-1.5 text-[11.5px] text-muted">{batch.supplier ?? "—"}</td>
       <td className="!py-1.5 !pr-0 text-right">
@@ -526,13 +549,13 @@ function BatchRow({
                 setConfirming(false);
               }}
               disabled={busy}
-              className="btn btn-danger !h-[23px] !px-2 !text-[11px]"
+              className="btn btn-danger !h-[22px] !px-2 !text-[11px]"
             >
               Clear all
             </button>
             <button
               onClick={() => setConfirming(false)}
-              className="btn btn-quiet !h-[23px] !px-1.5 !text-[11px]"
+              className="btn btn-quiet !h-[22px] !px-1.5 !text-[11px]"
             >
               Cancel
             </button>
@@ -541,7 +564,7 @@ function BatchRow({
           <button
             onClick={() => setConfirming(true)}
             disabled={busy}
-            className="btn btn-quiet !h-[23px] !px-1.5 !text-[11px]"
+            className="btn btn-quiet !h-[22px] !px-1.5 !text-[11px]"
             title="Adjust this batch quantity"
           >
             Adjust
@@ -553,5 +576,11 @@ function BatchRow({
 }
 
 function toneClass(tone: string): string {
-  return tone === "danger" ? "text-danger" : tone === "warn" ? "text-warn" : tone === "info" ? "text-info" : "text-muted";
+  return tone === "danger"
+    ? "text-danger-ink"
+    : tone === "warn"
+      ? "text-warn-ink"
+      : tone === "info"
+        ? "text-info-ink"
+        : "text-muted";
 }
